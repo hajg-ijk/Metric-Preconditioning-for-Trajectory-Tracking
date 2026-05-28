@@ -2,6 +2,10 @@
 
 This is a collection of Julia scripts for running the simulations from the paper "Metric Preconditioning for Trajectory Tracking" by Jacob Goodman and Hajg Jasa.
 
+After starting a Julia REPL, run
+`]activate MetricModification`
+and then `include("script-name")` to run the chosen script file.
+
 The script `build_maze.jl` constructs a nominal trajectory from the vector field `corridor_flow_direction_3d` designed in `vector_field.jl` to navigate a pre-defined maze and with which the metric is modified.
 The script saves the data as a .npz file. 
 This file must be compiled once before running other files.
@@ -13,6 +17,7 @@ This script must also be run once before running `main_gain_run.jl`.
 The main file for obtaining optimal gains is `main_gain_run.jl`.
 It imports the previously built nominal trajectories and simulates the dynamics written in the `dynamics.jl` file. 
 The dynamics rest on the `manifold_helpers.jl` file, used to compute the Levi-Civita connection, the differentials of one-form `μ` used to modify the original Riemannian metric of `SE(3)`, and the difference tensor between the old and new Levi-Civita connections.
+This is also where the inertia matrix `𝕁` is defined globally. 
 The main gain script then writes the obtained gains, as well as the simulated trajectories, position and velocity errors, and control magnitudes in .csv files.
 One simulation is run with a standard PD control, and another is run with a PD control plus metric preconditioning. 
 In both cases, a grid search is performed over possible gain values, and the performance is evaluated on a cost function that penalizes a weighted sum of the L2 and sup norms of the controls. This is chosen with the keyword argument `gain_criterion = :control`. Other choices include `:sum`, `norm2`, and `max`, to minimize a weighted sum of the gains, the 2 norm of the vector of gains, or the maximum weighted gain.
