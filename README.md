@@ -2,9 +2,15 @@
 
 This is a collection of Julia scripts for running the simulations from the paper "Metric Preconditioning for Trajectory Tracking" by Jacob Goodman and Hajg Jasa.
 
-After starting a Julia REPL, run
-`]activate MetricModification`
-and then `include("script-name")` to run the chosen script file.
+After starting a Julia REPL from the folder with the present code, run
+
+`]activate .`
+
+and then 
+
+`include("script-name")` 
+
+to run the chosen script file.
 
 The script `build_maze.jl` constructs a nominal trajectory from the vector field `corridor_flow_direction_3d` designed in `vector_field.jl` to navigate a pre-defined maze and with which the metric is modified.
 The script saves the data as a .npz file. 
