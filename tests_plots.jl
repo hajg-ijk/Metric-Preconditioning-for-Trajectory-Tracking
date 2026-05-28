@@ -2,10 +2,11 @@ using Manifolds, ManifoldsBase, LieGroups, ManifoldDiff
 using LinearAlgebra, Statistics, RecursiveArrayTools
 using DifferentialEquations, Dierckx
 using DifferentiationInterface, ForwardDiff, FiniteDifferences
+using OrdinaryDiffEqRosenbrock: Rodas4P
+using ADTypes: AutoFiniteDiff
 using GLMakie, Printf, NPZ
 using StaticArrays
 using Plots
-using ADTypes: AutoFiniteDiff
 using CSV, DataFrames
 
 # Define groups, points, basis and vectors
@@ -18,7 +19,6 @@ e1 = @SVector [1.0, 0.0, 0.0]
 e2 = @SVector [0.0, 1.0, 0.0]
 e3 = @SVector [0.0, 0.0, 1.0]
 
-include("diagnostics.jl")
 include("dynamics.jl")
 include("gain_sweep.jl")
 include("manifolds_helpers.jl")

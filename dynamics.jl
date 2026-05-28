@@ -587,7 +587,7 @@ function simulate_tracking(
   problem = ODEProblem(closed_loop_rhs, initial_state, (0.0, T), parameters)
   solution = solve(
     problem,
-    AutoTsit5(Rodas4P(autodiff=false));
+    AutoTsit5(Rodas4P(autodiff=AutoFiniteDiff()));
     reltol=rtol,
     abstol=atol,
     dtmax=max_step,
