@@ -1,39 +1,26 @@
-function parallel_gain_sweep(
-  T, R0, q0, v0, Ω0,
-  qd, vd, ad, jd, sd,
-  kR_vals, kq_vals, kv_vals, kΩ_vals;
-  mode=:euclidean, feedforward_type=:none, f_max=nothing, u_max=nothing
-)
-  nR, nq, nv, nΩ = length(kR_vals), length(kq_vals), length(kv_vals), length(kΩ_vals)
-  success = falses(nR, nq, nv, nΩ)
-  score   = fill(Inf, nR, nq, nv, nΩ)
-
-  combos = collect(Iterators.product(
-    enumerate(kR_vals), enumerate(kq_vals), enumerate(kv_vals), enumerate(kΩ_vals)
-  ))
-
-  Threads.@threads for idx in eachindex(combos)
-    (h, kR), (i, kq), (j, kv), (k, kΩ) = combos[idx]
-    try
-      sol = simulate_tracking(
-        T, R0, q0, v0, Ω0, qd, vd, ad, jd, sd, kR, kq, kv, kΩ;
-        mode=mode, feedforward_type=feedforward_type, f_max=f_max, u_max=u_max
-      )
-      ok, val = evaluate_tracking(
-        sol, qd, vd, ad, jd, sd, kR, kq, kv, kΩ;
-        mode=mode, feedforward_type=feedforward_type, f_max=f_max, u_max=u_max
-      )
-      success[h, i, j, k] = ok
-      score[h, i, j, k]   = val
-    catch e
-      # bad gain combo — leave as failed/Inf (the array defaults)
-      @debug "Gain combo (kR=$kR, kq=$kq, kv=$kv, kΩ=$kΩ) threw: $e"
-    end
-  end
-
-  return success, score
-end
-
+"""
+    gain_sweep(
+      T, 
+      R0, q0, v0, Ω0, 
+      qd, vd, ad, jd, sd,
+      kR_vals, kq_vals, kv_vals, kΩ_vals;
+      mode=:euclidean, feedforward_type=:none,
+      f_max=nothing, u_max=nothing
+    )
+    -> (success, score, controls)
+ 
+Sequential (single-threaded) gain grid search. Same logic as
+`parallel_gain_sweep` but also returns the sampled control signals for each
+combination.
+ 
+# Arguments
+Same as `parallel_gain_sweep`.
+ 
+# Returns
+- `success::BitArray{4}`, `score::Array{Float64,4}`: As in `parallel_gain_sweep`.
+- `controls::Array{Float64,5}`: Shape `(nR, nq, nv, nΩ, 100, 4)`. Each `[h,i,j,k,:,:]`
+  holds the concatenated `[f, u]` signals over 100 time samples.
+"""
 function gain_sweep(
   T, 
   R0, q0, v0, Ω0,
@@ -95,6 +82,30 @@ function gain_sweep(
   return success, score, controls
 end
 
+"""
+    select_minimal_successful_gain(
+      success, score, controls,
+      kR_vals, kq_vals, kv_vals, kΩ_vals;
+      criterion=:sum, weights=(1,1,1,1),
+      allow_best_failure=true
+    )
+    -> NamedTuple
+ 
+From the gain sweep results, select the gain combination that is (a) successful
+and (b) minimizes a user-specified cost criterion. Falls back to the
+lowest-score failing combination if no successes exist and `allow_best_failure`.
+ 
+# Arguments
+- `success, score, controls`: Outputs of `gain_sweep`.
+- `kR_vals, kq_vals, kv_vals, kΩ_vals`: Gain grids (for index lookup).
+- `criterion::Symbol`: One of `:sum`, `:norm2`, `:max`, `:control`.
+- `weights`: Relative weights `(wR, wq, wv, wΩ)` applied before the criterion.
+- `allow_best_failure::Bool`: If `true`, return best failing result instead of
+  erroring when no success exists.
+ 
+# Returns
+`NamedTuple` with fields `kR, kq, kv, kΩ, cost, score, h, i, j, k, criterion, successful`.
+"""
 function select_minimal_successful_gain(
   success, score, controls, kR_vals, kq_vals, kv_vals, kΩ_vals;
   criterion=:sum, 
@@ -171,6 +182,32 @@ function select_minimal_successful_gain(
   )
 end
 #
+"""
+    sweep_and_save_gains(
+      T, 
+      R0, q0, v0, Ω0, 
+      qd, vd, ad, jd, sd,
+      kR_vals, kq_vals, kv_vals, kΩ_vals;
+      feedforward_type=:none, f_max=nothing, u_max=nothing,
+      gain_criterion=:sum, gain_weights=(1,1,1,1),
+      trajectory="run_"
+    )
+ 
+Run `gain_sweep` for both `:euclidean` and `:preconditioned` modes, select the
+best gains, re-simulate with the selected gains, and write four CSV files per
+mode: gains, trajectory (xy), and errors/controls.
+ 
+# Arguments
+- `T, R0, q0, v0, Ω0, qd, vd, ad, jd, sd`: Simulation setup.
+- `kR_vals, kq_vals, kv_vals, kΩ_vals`: Gain grids.
+- `feedforward_type, f_max, u_max`: Controller options.
+- `gain_criterion, gain_weights`: Passed to `select_minimal_successful_gain`.
+- `trajectory::String`: Prefix for output CSV filenames.
+ 
+# Returns
+`nothing` (side-effects: prints summary, creates a "data" folder and writes 
+          CSV files in there).
+"""
 function sweep_and_save_gains(
   T, R0, q0, v0, Ω0,
   qd, vd, ad, jd, sd,
@@ -209,7 +246,9 @@ function sweep_and_save_gains(
       score = [score[best_idx],             selected.score],
       cost  = [NaN,                         selected.cost],
     )
-    CSV.write("../data/$(trajectory)_$(label)_gains.csv", df)
+    cd(@__DIR__)
+    mkpath("data")
+    CSV.write("data/$(trajectory)_$(label)_gains.csv", df)
 
     solution = simulate_tracking(
       T,
@@ -232,14 +271,14 @@ function sweep_and_save_gains(
       u_max=u_max
     )
 
-    CSV.write("../data/$(trajectory)_$(label)_trajectory.csv", DataFrame(
+    CSV.write("data/$(trajectory)_$(label)_trajectory.csv", DataFrame(
       q_ref_x = data.q_ref[:, 1],
       q_ref_y = data.q_ref[:, 2],
       q_x   = data.q[:, 1],
       q_y   = data.q[:, 2],
     ))
 
-    CSV.write("../data/$(trajectory)_$(label)_errors_control.csv", DataFrame(
+    CSV.write("data/$(trajectory)_$(label)_errors_control.csv", DataFrame(
       t         = data.t,
       pos_err = data.pos_err,
       vel_err = data.vel_err,

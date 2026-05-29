@@ -1,4 +1,19 @@
 # Helper functions
+"""
+    pack_state(R, q, v, Ω) -> SVector{18, Float64}
+ 
+Pack the rigid-body SE(3) state `(R ∈ SO(3), q ∈ ℝ³, v ∈ ℝ³, Ω ∈ ℝ³)` into
+a flat 18-dimensional static vector (row-major flattening of R followed by q,
+v, Ω).
+ 
+# Arguments
+- `R::SMatrix{3,3}`: Rotation matrix.
+- `q, v, Ω::SVector{3}`: Translation, body-frame linear velocity, body-frame
+  angular velocity.
+ 
+# Returns
+`SVector{18, Float64}`.
+"""
 @inline function pack_state(R, q, v, Ω)
   @SVector [R[1,1], R[1,2], R[1,3],
             R[2,1], R[2,2], R[2,3],
@@ -7,7 +22,21 @@
             v[1], v[2], v[3],
             Ω[1], Ω[2], Ω[3]]
 end
-#
+
+"""
+    unpack_state(u::SVector{18}) -> (R, q, v, Ω)
+ 
+Inverse of `pack_state`. Reconstructs the SE(3) state components from a flat
+18-vector.
+ 
+# Arguments
+- `u::SVector{18, Float64}`: Packed state.
+ 
+# Returns
+- `R::SMatrix{3,3}`: Rotation matrix.
+- `q, v, Ω::SVector{3}`: Translation, body-frame linear velocity, angular
+  velocity.
+"""
 @inline function unpack_state(u::SVector{18})
   R = @SMatrix [u[1]  u[2]  u[3];
                 u[4]  u[5]  u[6];
@@ -18,6 +47,24 @@ end
   return R, q, v, Ω
 end
 #
+"""
+    robust_frame_from_b3(b3) -> (b1, b2, Rd)
+ 
+Construct a right-handed orthonormal frame whose third column is `b3`,
+choosing the first axis to be the standard basis vector least aligned with `b3`
+to avoid singularities.
+ 
+# Arguments
+- `b3::AbstractVector{Float64}`: Desired thrust direction (unit vector).
+ 
+# Returns
+- `b1, b2::SVector{3}`: Orthonormal frame vectors.
+- `Rd::Matrix{Float64}`: Desired rotation matrix `[b1 | b2 | b3]`.
+
+!!! note
+    e1, e2, and e3 are assumed to be defined in a global scope where this 
+    script is run
+"""
 function robust_frame_from_b3(b3)
   candidates = (e1, e2, e3)
   dots = [abs(dot(a, b3)) for a in candidates]
@@ -30,6 +77,42 @@ function robust_frame_from_b3(b3)
   return b1, b2, hcat(b1, b2, b3)
 end
 #
+"""
+    controls_and_desired_rotation(
+      t, 
+      R, q, v, Ω, 
+      qd, vd, ad, jd, sd,
+      kR, kq, kv, kΩ;
+      feedforward_type=:none, Ω̇=zeros(3),
+      atol=1e-7, nu_tol=1e-2,
+      return_intermediates=false,
+      nu_preconditioning_world=SVector{3}(0,0,0),
+      freeze_desired_attitude_derivatives=false,
+    )
+    -> (f, u, Rd) or (f, u, Rd, intermediates)
+ 
+Compute the thrust scalar `f` and torque vector `u` for the geometric SE(3)
+tracking controller, together with the desired rotation `Rd`. Handles near-zero
+virtual acceleration (`‖ν‖ < nu_tol`) via a fallback attitude hold and optionally
+computes full desired-attitude derivatives for feedforward torque.
+ 
+# Arguments
+- `t::Float64`: Current time.
+- `R::SMatrix{3,3}`, `q, v, Ω::SVector{3}`: Current state.
+- `qd, vd, ad, jd, sd`: Reference trajectory callables `t -> ℝ³`.
+- `kR, kq, kv, kΩ::Float64`: Attitude, position, velocity, and angular-velocity gains.
+- `feedforward_type`: `:none` (pure PD) or `:euclidean` (adds reference derivatives).
+- `Ω̇`: Previous-step angular acceleration (used in second-order torque term).
+- `atol`: Tolerance for detecting `b3 ≈ e1`.
+- `nu_tol`: Threshold below which `ν` is considered degenerate.
+- `return_intermediates`: If `true`, return a named tuple of intermediate quantities.
+- `nu_preconditioning_world`: Additional world-frame acceleration bias injected
+  before constructing `Rd` (used by the preconditioned controller).
+- `freeze_desired_attitude_derivatives`: If `true`, set `Ωd = Ω̇d = 0` (quasi-static Rd).
+ 
+# Returns
+`(f::Float64, u::SVector{3}, Rd::Matrix)`, or with intermediates appended.
+"""
 function controls_and_desired_rotation(
   t, 
   R, q, v, Ω, 
@@ -208,6 +291,20 @@ function controls_and_desired_rotation(
   end
 end
 
+"""
+    clamp_vector_norm(x, xmax) -> same type as x
+ 
+Clamp a scalar or vector so its absolute value / Euclidean norm does not exceed
+`xmax`. Returns `zero(x)` for non-finite inputs. If `xmax === nothing`, returns
+`x` unchanged.
+ 
+# Arguments
+- `x`: Scalar or array.
+- `xmax`: Upper bound on the norm, or `nothing` to disable clamping.
+ 
+# Returns
+Clamped version of `x`.
+"""
 function clamp_vector_norm(x, xmax)
     xmax === nothing && return x
 
@@ -228,6 +325,19 @@ function clamp_vector_norm(x, xmax)
     end
 end
 
+"""
+    saturate_vector(u, u_max=nothing) -> same type as u
+ 
+Scale a vector down so its Euclidean norm does not exceed `u_max`. If
+`u_max === nothing`, returns `u` unchanged.
+ 
+# Arguments
+- `u`: Input vector.
+- `u_max`: Norm bound, or `nothing`.
+ 
+# Returns
+Saturated vector.
+"""
 function saturate_vector(u, u_max=nothing)
     u_max === nothing && return u
     n = norm(u)
@@ -243,6 +353,16 @@ end
 # The correction returned is Γ_h(q)(qdot,qdot) in world coordinates.
 # It intentionally avoids the SE(3) atlas/local_metric/difference_tensor path for now.
 
+"""
+    _metric_lambda() -> Float64
+ 
+Read the global variable `λ_metric` (or fall back to `λ`, then `0.0`) and
+return it as a `Float64`. Used to inject the metric scaling parameter into
+functions without explicit argument threading.
+ 
+# Returns
+`Float64`: current λ.
+"""
 function _metric_lambda()
     if isdefined(Main, :λ_metric)
         return Float64(getfield(Main, :λ_metric))
@@ -253,6 +373,14 @@ function _metric_lambda()
     end
 end
 
+"""
+    _preconditioner_scale() -> Float64
+ 
+Return the global `preconditioner_scale` if defined, otherwise `0.02`.
+ 
+# Returns
+`Float64`: preconditioner scaling factor γ.
+"""
 function _preconditioner_scale()
     if isdefined(Main, :preconditioner_scale)
         return Float64(getfield(Main, :preconditioner_scale))
@@ -262,6 +390,14 @@ function _preconditioner_scale()
     end
 end
 
+"""
+    _preconditioner_correction_max() -> Float64
+ 
+Return the global `preconditioner_correction_max` if defined, otherwise `0.5`.
+ 
+# Returns
+`Float64`: upper bound on the Christoffel correction norm.
+"""
 function _preconditioner_correction_max()
     if isdefined(Main, :preconditioner_correction_max)
         return Float64(getfield(Main, :preconditioner_correction_max))
@@ -270,6 +406,14 @@ function _preconditioner_correction_max()
     end
 end
 
+"""
+    _preconditioner_fd_step() -> Float64
+ 
+Return the global `preconditioner_fd_step` if defined, otherwise `1e-5`.
+ 
+# Returns
+`Float64`: finite-difference step size used in metric derivative estimates.
+"""
 function _preconditioner_fd_step()
     if isdefined(Main, :preconditioner_fd_step)
         return Float64(getfield(Main, :preconditioner_fd_step))
@@ -278,6 +422,18 @@ function _preconditioner_fd_step()
     end
 end
 
+"""
+    _vf_world(q) -> SVector{3, Float64}
+ 
+Evaluate the corridor vector field at world-frame position `q`, returning a
+finite `SVector{3}` (falls back to zero on non-finite values).
+ 
+# Arguments
+- `q`: Position in ℝ³.
+ 
+# Returns
+`SVector{3, Float64}`: corridor flow direction.
+"""
 function _vf_world(q)
     V = corridor_flow_direction_3d(q[1], q[2], q[3])
     V = SVector{3,Float64}(V[1], V[2], V[3])
@@ -289,6 +445,20 @@ function _vf_world(q)
     return V
 end
 
+"""
+    translational_metric_matrix(q; λ_metric=_metric_lambda()) -> SMatrix{3,3}
+ 
+Compute the covariant output-space metric tensor
+    h(q) = I - (λ²/(1 + λ²‖V‖²)) V Vᵀ
+where `V = corridor_flow_direction_3d(q...)`.
+ 
+# Arguments
+- `q`: Position in ℝ³.
+- `λ_metric::Float64`: Metric deformation parameter.
+ 
+# Returns
+`SMatrix{3,3, Float64}`: symmetric positive definite 3×3 metric matrix.
+"""
 function translational_metric_matrix(q; λ_metric=_metric_lambda())
     q = SVector{3,Float64}(q[1], q[2], q[3])
     V = _vf_world(q)
@@ -309,6 +479,20 @@ function translational_metric_matrix(q; λ_metric=_metric_lambda())
     return I3 - (β / (1.0 + β * s)) * (V * V')
 end
 
+"""
+    translational_inverse_metric_matrix(q; λ_metric=_metric_lambda()) -> SMatrix{3,3}
+ 
+Compute the contravariant (inverse) metric
+    h⁻¹(q) = I + λ² V Vᵀ
+using the Sherman–Morrison formula.
+ 
+# Arguments
+- `q`: Position in ℝ³.
+- `λ_metric::Float64`: Metric deformation parameter.
+ 
+# Returns
+`SMatrix{3,3, Float64}`.
+"""
 function translational_inverse_metric_matrix(q; λ_metric=_metric_lambda())
     q = SVector{3,Float64}(q[1], q[2], q[3])
     V = _vf_world(q)
@@ -324,6 +508,27 @@ function translational_inverse_metric_matrix(q; λ_metric=_metric_lambda())
     return I3 + β * (V * V')
 end
 
+"""
+    translational_connection_correction(
+      q, qdot;
+      λ_metric=_metric_lambda(),
+      hfd=_preconditioner_fd_step()
+    )
+    -> SVector{3, Float64}
+ 
+Compute the Christoffel contraction Γ_h(q)(q̇, q̇) for the deformed metric h,
+via finite-difference estimation of the metric Jacobian. This is the intrinsic
+acceleration correction added by the modified metric.
+ 
+# Arguments
+- `q, qdot`: Position and velocity in ℝ³.
+- `λ_metric`: Metric parameter.
+- `hfd`: Finite-difference step size for metric derivatives.
+ 
+# Returns
+`SVector{3}`: Christoffel correction term in world coordinates.
+Returns zero on non-finite inputs.
+"""
 function translational_connection_correction(
     q,
     qdot;
@@ -374,55 +579,102 @@ function translational_connection_correction(
     return SVector{3,Float64}(T)
 end
 
+"""
+    _maybe_print_translational_preconditioner_debug(
+      t, q, qd_t, q̇_world,
+      Tq, Tq_clamped, γ_pre, λ_metric
+    )
+ 
+Print a debug dump if the global flag `preconditioner_debug` is `true` and the
+Christoffel correction is large (‖Tq‖ > 1). Intended for development
+diagnostics; no-ops in normal usage.
+ 
+# Arguments
+All arguments are the corresponding quantities computed inside `physical_control`.
+ 
+# Returns
+`nothing`.
+"""
 function _maybe_print_translational_preconditioner_debug(t, q, qd_t, q̇_world, Tq, Tq_clamped, γ_pre, λ_metric)
-    debug = isdefined(Main, :preconditioner_debug) ? Bool(getfield(Main, :preconditioner_debug)) : false
-    debug || return nothing
+  debug = isdefined(Main, :preconditioner_debug) ? Bool(getfield(Main, :preconditioner_debug)) : false
+  debug || return nothing
 
-    nT = norm(Tq)
-    nTc = norm(Tq_clamped)
-    if nT > 1.0 || nTc > 1.0
-        V_now = _vf_world(q)
-        V_ref = _vf_world(qd_t)
-#         @printf("""
-# [translational output-space preconditioner]
-# t = %.6f
-# λ_metric = %.6e
-# γ_pre = %.6e
-# q = %s
-# qd = %s
-# q̇_world = %s
-# V(q) = %s
-# ||V(q)|| = %.6e
-# V(qd) = %s
-# ||V(qd)|| = %.6e
-# Tq = %s
-# ||Tq|| = %.6e
-# Tq_clamped = %s
-# ||Tq_clamped|| = %.6e
-# ν_bias = %s
-#
-# """,
-#             t,
-#             λ_metric,
-#             γ_pre,
-#             string(q),
-#             string(qd_t),
-#             string(q̇_world),
-#             string(V_now),
-#             norm(V_now),
-#             string(V_ref),
-#             norm(V_ref),
-#             string(Tq),
-#             norm(Tq),
-#             string(Tq_clamped),
-#             norm(Tq_clamped),
-#             string(-γ_pre * Tq_clamped),
-#         )
-    end
+  nT = norm(Tq)
+  nTc = norm(Tq_clamped)
+  if nT > 1.0 || nTc > 1.0
+    V_now = _vf_world(q)
+    V_ref = _vf_world(qd_t)
+    @printf("""
+ [translational output-space preconditioner]
+ t = %.6f
+ λ_metric = %.6e
+ γ_pre = %.6e
+ q = %s
+ qd = %s
+ q̇_world = %s
+ V(q) = %s
+ ||V(q)|| = %.6e
+ V(qd) = %s
+ ||V(qd)|| = %.6e
+ Tq = %s
+ ||Tq|| = %.6e
+ Tq_clamped = %s
+ ||Tq_clamped|| = %.6e
+ ν_bias = %s
 
-    return nothing
+ """,
+    t,
+    λ_metric,
+    γ_pre,
+    string(q),
+    string(qd_t),
+    string(q̇_world),
+    string(V_now),
+    norm(V_now),
+    string(V_ref),
+    norm(V_ref),
+    string(Tq),
+    norm(Tq),
+    string(Tq_clamped),
+    norm(Tq_clamped),
+    string(-γ_pre * Tq_clamped),
+)
+  end
+
+  return nothing
 end
 
+"""
+    physical_control(
+      t, 
+      R, q, v, Ω, 
+      qd, vd, ad, jd, sd, 
+      kR, kq, kv, kΩ;
+      mode=:euclidean, feedforward_type=:none,
+      f_max=nothing, u_max=nothing,
+      atol=1e-7, nu_tol=1e-7, Ω̇=zeros(3)
+    )
+    -> (f, u)
+ 
+Compute and optionally saturate the thrust `f` and torque `u` for the
+closed-loop controller. Dispatches on `mode`:
+- `:euclidean` — standard geometric PD controller.
+- `:preconditioned` — adds a Christoffel correction to the virtual acceleration
+  before constructing the desired attitude.
+ 
+# Arguments
+- `t::Float64`, `R, q, v, Ω`: Current time and SE(3) state.
+- `qd, vd, ad, jd, sd`: Reference trajectory callables.
+- `kR, kq, kv, kΩ::Float64`: Controller gains.
+- `mode::Symbol`: `:euclidean` or `:preconditioned`.
+- `feedforward_type::Symbol`: `:none` or `:euclidean`.
+- `f_max, u_max`: Saturation bounds (or `nothing`).
+- `atol, nu_tol, Ω̇`: Passed to `controls_and_desired_rotation`.
+ 
+# Returns
+- `f::Float64`: Saturated thrust scalar.
+- `u::SVector{3}`: Saturated torque vector.
+"""
 function physical_control(
   t, 
   R, q, v, Ω, 
@@ -518,7 +770,23 @@ function physical_control(
 
   return saturate_vector(f_phys, f_max), saturate_vector(u_phys, u_max)
 end
-#
+
+"""
+    closed_loop_rhs(state, parameters, t) -> SVector{18, Float64}
+ 
+ODE right-hand side for the full closed-loop SE(3) system. Unpacks the state,
+calls `physical_control`, integrates the SE(3) kinematics, and stores the
+angular acceleration `Ω̇` in the mutable parameter reference.
+ 
+# Arguments
+- `state::SVector{18}`: Packed rigid-body state.
+- `parameters`: Tuple `(Ω̇_ref, qd, vd, ad, jd, sd, kR, kq, kv, kΩ, mode,
+  feedforward_type, f_max, u_max, atol, nu_tol)`.
+- `t::Float64`: Current time.
+ 
+# Returns
+`SVector{18, Float64}`: Packed state derivative `(Ṙ, q̇, v̇, Ω̇)`.
+"""
 function closed_loop_rhs(state, parameters, t)
   # Assuming state = ArrayPartition(R, q, v, Ω), with the components of g ∈ SE(3) given by R ∈ SO(3), q ∈ ℝ³, and velocities v, Ω ∈ ℝ³
   # make sure 𝕁, so3 and e3 are either defined in the global scope, of passed as function parameters
@@ -556,6 +824,33 @@ function closed_loop_rhs(state, parameters, t)
 
   return pack_state(Ṙ, q̇, v̇, Ω̇)
 end
+
+"""
+    simulate_tracking(T, R0, q0, v0, Ω0, qd, vd, ad, jd, sd,
+                      kR, kq, kv, kΩ;
+                      mode=:euclidean, feedforward_type=:none,
+                      f_max=nothing, u_max=nothing,
+                      rtol=1e-7, atol=1e-9, nu_tol=1e-3,
+                      Ω̇0=Ref(SVector{3}(0,0,0)), max_step=0.02)
+    -> ODESolution
+ 
+Integrate the closed-loop dynamics from `t=0` to `t=T` using `AutoTsit5` with
+a `Rodas4P` stiff fallback.
+ 
+# Arguments
+- `T::Float64`: Simulation duration.
+- `R0::SMatrix{3,3}`, `q0, v0, Ω0::SVector{3}`: Initial conditions.
+- `qd, vd, ad, jd, sd`: Reference trajectory callables.
+- `kR, kq, kv, kΩ::Float64`: Controller gains.
+- `mode, feedforward_type, f_max, u_max`: Passed to `physical_control`.
+- `rtol, atol`: ODE solver tolerances.
+- `nu_tol`: Near-zero virtual acceleration threshold.
+- `Ω̇0`: Mutable reference for lagged angular acceleration.
+- `max_step`: Maximum ODE step size.
+ 
+# Returns
+`ODESolution` from DifferentialEquations.jl.
+"""
 function simulate_tracking(
   T, 
   R0, q0, v0, Ω0, 
@@ -596,5 +891,4 @@ function simulate_tracking(
 
   return solution
 end
-
 

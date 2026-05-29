@@ -6,6 +6,20 @@ using NPZ
 # ============================================================
 # 1) Maze drawing in 3D
 # ============================================================
+"""
+    plot_maze_3d!(ax; color=:black, linewidth=3)
+ 
+Draw the 3D maze geometry (vertical walls extruded from z=0 to z=2) on a
+GLMakie `Axis3` object.
+ 
+# Arguments
+- `ax`: A GLMakie `Axis3` to draw into (mutated in-place).
+- `color`: Line color. Default `:black`.
+- `linewidth`: Line width. Default `3`.
+ 
+# Returns
+`nothing` (mutates `ax`).
+"""
 function plot_maze_3d!(ax; color=:black, linewidth=3)
     segments = [
         ((0.0, -2.0, 0.0), (0.0, 0.0, 0.0)),
@@ -27,10 +41,51 @@ end
 # ============================================================
 # 2) 3D Vector Field
 # ============================================================
+"""
+    logistic(z) -> Float64
+ 
+Numerically stable logistic (sigmoid) function `1 / (1 + exp(-z))`.
+ 
+# Arguments
+- `z::Real`: Input value.
+ 
+# Returns
+`Float64` in (0, 1).
+"""
 logistic(z) = 1.0 / (1.0 + exp(-z))
 
+"""
+    smooth_window(z, zmin, zmax, s) -> Float64
+ 
+Smooth bump function that is approximately 1 for `z ∈ (zmin, zmax)` and decays
+to 0 outside, using a product of two logistic functions with scale `s`.
+ 
+# Arguments
+- `z::Real`: Evaluation point.
+- `zmin::Real`, `zmax::Real`: Interval boundaries.
+- `s::Real`: Transition sharpness (gate width).
+ 
+# Returns
+`Float64` in (0, 1).
+"""
 smooth_window(z, zmin, zmax, s) = logistic((z - zmin) / s) * logistic((zmax - z) / s)
 
+"""
+    corridor_field_raw(x, y; sigma=0.22, gate=0.12, center_gain=2.5) -> Vector{Float64}
+ 
+Compute a raw (un-normalized) 2D planar vector field for the corridor maze at
+position `(x, y)`. Three corridor primitives (right, top, left) are blended via
+Gaussian weights.
+ 
+# Arguments
+- `x, y::Real`: Evaluation point in the maze plane.
+- `sigma`: Gaussian width controlling corridor transverse localization.
+- `gate`: Logistic gate half-width for along-corridor extent.
+- `center_gain`: Transverse centering gain.
+ 
+# Returns
+`Vector{Float64}` of length 2: the raw 2D velocity vector.
+"""
 function corridor_field_raw(x, y; sigma=0.22, gate=0.12, center_gain=2.5)
     w_r = exp(-((x - 0.50) / sigma)^2) * smooth_window(y, -2.05, 0.45, gate)
     w_t = exp(-((y - 0.25) / sigma)^2) * smooth_window(x, -0.90, 0.60, gate)
@@ -44,6 +99,20 @@ function corridor_field_raw(x, y; sigma=0.22, gate=0.12, center_gain=2.5)
     return raw
 end
 
+"""
+    corridor_flow_direction(x, y; sigma=0.22, gate=0.12, center_gain=2.5, eps=1e-8) -> Vector{Float64}
+ 
+Normalized 2D corridor flow direction at `(x, y)`, obtained by normalizing
+`corridor_field_raw` with an `eps`-regularized norm.
+ 
+# Arguments
+- `x, y::Real`: Evaluation point.
+- `sigma`, `gate`, `center_gain`: Passed to `corridor_field_raw`.
+- `eps`: Regularization for division.
+ 
+# Returns
+`Vector{Float64}` of length 2: unit-ish flow direction.
+"""
 function corridor_flow_direction(x, y; sigma=0.22, gate=0.12, center_gain=2.5, eps=1e-8)
     raw = corridor_field_raw(x, y; sigma=sigma, gate=gate, center_gain=center_gain)
     n = sqrt(dot(raw, raw) + eps^2)
@@ -51,7 +120,29 @@ function corridor_flow_direction(x, y; sigma=0.22, gate=0.12, center_gain=2.5, e
 end
 
 # 3D version: Add a z-component (e.g., W = 0.1 * z)
-function corridor_flow_direction_3d(x, y, z; sigma=0.22, gate=0.12, center_gain=2.5, eps=1e-8, z_weight=0.0)
+"""
+    second_corridor_flow_direction_3d(x, y, z; sigma=0.22, gate=0.12, center_gain=2.5,
+                                eps=1e-8, z_weight=0.0) -> Vector{Float64}
+ 
+Extend the 2D corridor flow to 3D by appending a z-component `W = z_weight * z`.
+The result is normalized.
+ 
+# Arguments
+- `x, y, z::Real`: 3D evaluation point.
+- `sigma`, `gate`, `center_gain`: Passed to `corridor_flow_direction`.
+- `eps`: Norm regularization.
+- `z_weight`: Gain for the z-component.
+ 
+# Returns
+`Vector{Float64}` of length 3: normalized 3D flow direction.
+ 
+!!! note
+    This is the version that produces a curve not integral to the main
+    vector field used to deform the geometry of the problem.  The
+    production version (with conditioning improvements) lives in
+    `vector_field.jl`.
+"""
+function second_corridor_flow_direction_3d(x, y, z; sigma=0.22, gate=0.12, center_gain=2.5, eps=1e-8, z_weight=0.0)
     v_2d = corridor_flow_direction(x, y; sigma=sigma, gate=gate, center_gain=center_gain)
     W = z_weight * z  # Example: z-component scales with z
     U, V = v_2d
@@ -62,6 +153,22 @@ end
 # ============================================================
 # 3) Compute 3D Vector Field on a Grid
 # ============================================================
+"""
+    compute_3d_vector_field(xmin, xmax, ymin, ymax, zmin, zmax;
+                            nx=10, ny=10, nz=10)
+    -> (X, Y, Z, U, V, W)
+ 
+Evaluate the 3D corridor vector field on a uniform Cartesian grid and return
+flattened coordinate and component arrays, suitable for `arrows3d!`.
+ 
+# Arguments
+- `xmin, xmax, ymin, ymax, zmin, zmax::Real`: Grid extents.
+- `nx, ny, nz::Int`: Number of grid points along each axis.
+ 
+# Returns
+Six `Vector{Float64}` of length `nx*ny*nz`: positions `(X,Y,Z)` and velocity
+components `(U,V,W)`.
+"""
 function compute_3d_vector_field(xmin, xmax, ymin, ymax, zmin, zmax; nx=10, ny=10, nz=10)
     xs = range(xmin, xmax, length=nx)
     ys = range(ymin, ymax, length=ny)
@@ -80,7 +187,7 @@ function compute_3d_vector_field(xmin, xmax, ymin, ymax, zmin, zmax; nx=10, ny=1
         X[idx] = x
         Y[idx] = y
         Z[idx] = z
-        v = corridor_flow_direction_3d(x, y, z)
+        v = second_corridor_flow_direction_3d(x, y, z)
         U[idx] = v[1]
         V[idx] = v[2]
         W[idx] = v[3]
@@ -93,15 +200,51 @@ end
 # ============================================================
 # 4) ODE Solver for Reference Trajectory
 # ============================================================
+"""
+    reference_rhs!(dq, q, p, t)
+ 
+ODE right-hand side for the reference trajectory integrator (in-place).
+Sets `dq = speed * second_corridor_flow_direction_3d(q...)`.
+ 
+# Arguments
+- `dq`: Output derivative vector (mutated).
+- `q::Vector`: Current state `[x, y, z]`.
+- `p`: Parameter tuple `[speed, sigma, gate, center_gain]`.
+- `t`: Current time (unused by the field itself).
+ 
+# Returns
+`nothing`.
+"""
 function reference_rhs!(dq, q, p, t)
     x, y, z = q
     speed, sigma, gate, center_gain = p
-    v = corridor_flow_direction_3d(x, y, z; sigma=sigma, gate=gate, center_gain=center_gain)
+    v = second_corridor_flow_direction_3d(x, y, z; sigma=sigma, gate=gate, center_gain=center_gain)
     dq[1] = speed * v[1]
     dq[2] = speed * v[2]
     dq[3] = speed * v[3]
 end
 
+"""
+    build_reference(q_start, q_goal; speed=0.9, sigma=0.22, gate=0.12,
+                    center_gain=2.5, T_max=8.0, n_samples=1200,
+                    out_file="inexact_reference.npz")
+    -> (t_ref, q_ref)
+ 
+Integrate the corridor flow field from `q_start` toward `q_goal`, stopping
+early when within 0.03 of the goal. Saves the trajectory to an `.npz` file.
+ 
+# Arguments
+- `q_start, q_goal::Vector{Float64}`: Start and goal positions in ℝ³.
+- `speed`: Scalar speed along the field.
+- `sigma`, `gate`, `center_gain`: Vector field parameters.
+- `T_max::Float64`: Maximum integration time.
+- `n_samples::Int`: Number of saved time samples.
+- `out_file::String`: Output file path.
+ 
+# Returns
+- `t_ref::Vector{Float64}`: Time samples.
+- `q_ref::Matrix{Float64}`: Trajectory of shape `(n_samples, 3)`.
+"""
 function build_reference(
     q_start=[0.50, -1.80, 1.0],
     q_goal=[-0.75, 1.25, 1.0];

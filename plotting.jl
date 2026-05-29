@@ -1,3 +1,37 @@
+"""
+    plot_tracking_comparison(
+      T, 
+      R0, q0, v0, Ω0,
+      qd, vd, ad, jd, sd,
+      kR_e, kq_e, kv_e, kΩ_e,
+      kR_p, kq_p, kv_p, kΩ_p;
+      feedforward_type=:none, f_max=nothing, u_max=nothing,
+      xmin=-2, xmax=2, ymin=-2.5, ymax=2, zmin=0, zmax=2,
+      show_maze=true, show_μ_field=true,
+      trajectory="exact_", write=true
+    )
+    -> (sol_e, sol_p, data_e, data_p)
+ 
+Simulate both Euclidean and preconditioned controllers, produce a 4-panel
+GLMakie figure (trajectory, position error, control magnitude, velocity error),
+and optionally write trajectory and error CSVs.
+ 
+# Arguments
+- `T, R0, q0, v0, Ω0`: Simulation horizon and initial conditions.
+- `qd, vd, ad, jd, sd`: Reference callables.
+- `kR_e, kq_e, kv_e, kΩ_e`: Euclidean controller gains.
+- `kR_p, kq_p, kv_p, kΩ_p`: Preconditioned controller gains.
+- `feedforward_type, f_max, u_max`: Passed to `simulate_tracking`.
+- `xmin, xmax, ymin, ymax, zmin, zmax`: Vector field plot extent.
+- `show_maze::Bool`: Draw the maze walls.
+- `show_μ_field::Bool`: Overlay the corridor vector field arrows.
+- `trajectory::String`: Prefix for output CSV filenames.
+- `write::Bool`: Whether to write CSV output files.
+ 
+# Returns
+- `sol_e, sol_p`: ODE solutions for Euclidean and preconditioned controllers.
+- `data_e, data_p`: Sampled data NamedTuples from `sample_solution`.
+"""
 function plot_tracking_comparison(
   T,
   R0, q0, v0, Ω0,
@@ -248,6 +282,36 @@ function plot_tracking_comparison(
   return sol_e, sol_p, data_e, data_p
 end
 #
+"""
+    auto_select_and_plot_tracking_comparison(
+      T, 
+      R0, q0, v0, Ω0, 
+      qd, vd, ad, jd, sd,
+      kR_vals, kq_vals, kv_vals, kΩ_vals;
+      feedforward_type=:none, f_max=nothing,
+      u_max=nothing, gain_criterion=:sum,
+      gain_weights=(1,1,1,1),
+      xmin, xmax, ymin, ymax, zmin, zmax,
+      show_maze=true, show_μ_field=true,
+      trajectory="exact_", write=false
+    )
+    -> NamedTuple
+ 
+Run `gain_sweep` for both modes, select the best gains via
+`select_minimal_successful_gain`, print a summary, and call
+`plot_tracking_comparison` with the selected gains.
+ 
+# Arguments
+- `T, R0, q0, v0, Ω0, qd, vd, ad, jd, sd`: Simulation setup.
+- `kR_vals, kq_vals, kv_vals, kΩ_vals`: Gain grids.
+- `feedforward_type, f_max, u_max, gain_criterion, gain_weights`: Controller options.
+- `xmin, xmax, ymin, ymax, zmin, zmax, show_maze, show_μ_field, trajectory, write`:
+  Forwarded to `plot_tracking_comparison`.
+ 
+# Returns
+`NamedTuple` with fields `euclidean, preconditioned, success_e, success_p,
+score_e, score_p`.
+"""
 function auto_select_and_plot_tracking_comparison(
   T,
   R0, q0, v0, Ω0, 
@@ -395,6 +459,23 @@ function auto_select_and_plot_tracking_comparison(
   )
 end
 #
+"""
+    plot_gain_sweep_comparison(
+      T, 
+      R0, q0, v0, Ω0, 
+      qd, vd, ad, jd, sd,
+      kR_vals, kq_vals, kv_vals, kΩ_vals;
+      feedforward_type=:none, f_max=nothing, u_max=nothing,
+      gain_criterion=:sum, gain_weights=(1,1,1,1)
+    )
+ 
+Run gain sweeps for both modes and display a 3-panel GLMakie heatmap figure
+showing: Euclidean success, preconditioned success, and their difference, as
+functions of `kv` and `kq`.
+ 
+# Returns
+`nothing` (displays figure).
+"""
 function plot_gain_sweep_comparison(
   T,
   R0, q0, v0, Ω0, 
@@ -471,6 +552,23 @@ function plot_gain_sweep_comparison(
   display(fig)
 end
 
+"""
+    animate_trajectories(euclidean_file, preconditioned_file;
+                          output="trajectory.gif", framerate=90, sleep_time=nothing)
+ 
+Read two trajectory CSV files (columns `q_x, q_y, q_ref_x, q_ref_y`) and
+produce an animation of the two controlled trajectories against the reference.
+ 
+# Arguments
+- `euclidean_file, preconditioned_file::String`: Paths to CSV files.
+- `output::String`: Output GIF filename.
+- `framerate::Int`: Frames per second for the GIF.
+- `sleep_time`: If not `nothing`, display interactively with `sleep` between
+  frames instead of recording.
+ 
+# Returns
+`nothing`.
+"""
 function animate_trajectories(
   euclidean_file, preconditioned_file;
   output="trajectory.gif", framerate=90, sleep_time=nothing

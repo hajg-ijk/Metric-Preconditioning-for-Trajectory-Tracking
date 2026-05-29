@@ -1,3 +1,18 @@
+"""
+    sanity_check_exact_tracking(T, qd, vd, ad, jd, sd)
+ 
+Run a quick closed-loop simulation for both `:euclidean` and `:preconditioned`
+modes with hardcoded gains, and print position/velocity tracking errors.
+Intended as a smoke test to verify the controller pipeline.
+ 
+# Arguments
+- `T::Float64`: Simulation horizon.
+- `qd, vd, ad, jd, sd`: Functions `t -> ℝ³` for desired position, velocity,
+  acceleration, jerk, and snap respectively.
+ 
+# Returns
+`nothing` (prints results to stdout).
+"""
 function sanity_check_exact_tracking(
   T, 
   qd, vd, ad, jd, sd, 
@@ -80,6 +95,30 @@ function sanity_check_exact_tracking(
 
 end
 
+"""
+    reference_diagnostics(T, qd, vd, ad, jd, sd; n=2000, eps=1e-8, top_k=8)
+    -> NamedTuple
+ 
+Compute and print a comprehensive conditioning report for a reference
+trajectory, including derivative norms, space-curve curvature, conditioning of
+the desired thrust axis `b3d = ν/‖ν‖`, and conditioning of the auxiliary body
+axis `b1 = normalize(e1 × b3)`.
+ 
+# Arguments
+- `T::Float64`: Trajectory duration.
+- `qd, vd, ad, jd, sd`: Reference trajectory functions `t -> ℝ³`.
+- `n::Int`: Number of evaluation points. Default `2000`.
+- `eps::Float64`: Small regularization constant. Default `1e-8`.
+- `top_k::Int`: Number of worst-case time instants to print per metric. Default `8`.
+ 
+# Returns
+`NamedTuple` with fields:
+- `t`, `vnorm`, `anorm`, `jnorm`, `snorm`: Time vector and norms of derivatives.
+- `curvature`, `radius`: Space-curve curvature κ and turn radius 1/κ.
+- `nunorm`: Norm of the virtual acceleration `ν_ref = ad(t)`.
+- `jerk_over_nu`, `snap_over_nu`, `jerk2_over_nu2`: Conditioning ratios.
+- `b1_denom`, `b3_dot_e1`: Quantities measuring proximity to the `b1` singularity.
+"""
 function reference_diagnostics(T, qd, vd, ad, jd, sd; n=2000, eps=1e-8, top_k=8)
   ts = collect(range(0.0, T, length=n))
 

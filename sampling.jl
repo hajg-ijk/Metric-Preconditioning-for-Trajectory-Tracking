@@ -1,3 +1,32 @@
+"""
+    sample_solution(
+      sol, 
+      qd, vd, ad, jd, sd, 
+      kR, kq, kv, kΩ;
+      mode=:euclidean, feedforward_type=:none,
+      f_max=nothing, u_max=nothing, n_samples=100
+    )
+    -> NamedTuple
+ 
+Evaluate the ODE solution at `n_samples` evenly spaced time points and compute
+tracking errors and control signals.
+ 
+# Arguments
+- `sol`: `ODESolution` from `simulate_tracking` (must have a successful retcode).
+- `qd, vd, ad, jd, sd`: Reference callables.
+- `kR, kq, kv, kΩ::Float64`: Controller gains.
+- `mode, feedforward_type, f_max, u_max`: Passed to `physical_control`.
+- `n_samples::Int`: Number of evaluation points.
+ 
+# Returns
+`NamedTuple` with fields:
+- `t::AbstractRange`: Sample times.
+- `q, v::Matrix`: State trajectories `(n_samples, 3)`.
+- `q_ref, v_ref, a_ref, j_ref, s_ref::Matrix`: Reference trajectories.
+- `f::Vector`: Thrust signals.
+- `u::Matrix`: Torque signals `(n_samples, 3)`.
+- `pos_err, vel_err, u_norm::Vector`: Per-sample tracking errors and control norm.
+"""
 function sample_solution(
   sol, 
   qd, vd, ad, jd, sd, 
@@ -68,6 +97,23 @@ function sample_solution(
   )
 end
 
+"""
+    weighted_rms(values, t; power=2.0, eps=0.05) -> Float64
+ 
+Compute a time-weighted RMS of `values` over `t`, with polynomial weight
+`w(τ) = eps + τ^power` (where `τ` is normalized time). Uses the trapezoidal
+rule. Weights later time-points more heavily, penalizing poor steady-state
+performance.
+ 
+# Arguments
+- `values::Vector{Float64}`: Signal to measure.
+- `t::AbstractVector`: Time vector.
+- `power::Float64`: Exponent for the time weight.
+- `eps::Float64`: Additive baseline weight at `τ=0`.
+ 
+# Returns
+`Float64`: weighted RMS value.
+"""
 function weighted_rms(values, t; power=2.0, eps=0.05)
   T = t[end] - t[1]
   T <= 0 && return sqrt(mean(values.^2))
@@ -81,6 +127,35 @@ function weighted_rms(values, t; power=2.0, eps=0.05)
   return sqrt(num / den)
 end
 
+"""
+    evaluate_tracking(
+      sol, 
+      qd, vd, ad, jd, sd, 
+      kR, kq, kv, kΩ;
+      mode=:euclidean, feedforward_type=:none,
+      f_max=nothing, u_max=nothing,
+      final_pos_tol=0.08, final_vel_tol=0.10,
+      weighted_rms_pos_tol=0.20, weighted_rms_vel_tol=0.25,
+      weight_power=2.0, weight_eps=0.05
+    )
+    -> (success::Bool, score::Float64)
+ 
+Evaluate a closed-loop trajectory against position and velocity tracking
+tolerances, using both final-time values and weighted RMS metrics.
+ 
+# Arguments
+- `sol`: ODE solution.
+- `qd, vd, ad, jd, sd, kR, kq, kv, kΩ`: Passed to `sample_solution`.
+- `mode, feedforward_type, f_max, u_max`: Controller options.
+- `final_pos_tol, final_vel_tol`: Tolerances on final-time errors.
+- `weighted_rms_pos_tol, weighted_rms_vel_tol`: Tolerances on weighted RMS errors.
+- `weight_power, weight_eps`: Parameters for `weighted_rms`.
+ 
+# Returns
+- `success::Bool`: `true` iff all four criteria are satisfied and the solve succeeded.
+- `score::Float64`: `2*wrms_pos + wrms_vel + 2*final_pos + final_vel`
+  (lower is better; `Inf` on solver failure).
+"""
 function evaluate_tracking(
   sol, 
   qd, vd, ad, jd, sd, 

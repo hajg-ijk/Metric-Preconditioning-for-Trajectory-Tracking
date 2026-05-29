@@ -1,4 +1,17 @@
 # For SE(3)
+"""
+    make_SE3_point(R, q) -> Matrix{Float64}
+ 
+Assemble an SE(3) element as a homogeneous 4×4 matrix from rotation `R` and
+translation `q`.
+ 
+# Arguments
+- `R::Matrix{Float64}`: 3×3 rotation matrix.
+- `q::Vector{Float64}`: Translation vector.
+ 
+# Returns
+`Matrix{Float64}` of size (4,4).
+"""
 function make_SE3_point(R, q)
   return vcat(hcat(R, q), [0.0 0.0 0.0 1.0])
 end
@@ -26,6 +39,21 @@ end
 global 𝕁 = SMatrix{3, 3, Float64}(diagm([0.082, 0.0845, 0.1377]))
 #
 # NOTE: the following `inner` function, and all subsequent ones, depend on the global 𝕁
+"""
+    inner(se3, Xe, Ye; J=𝕁) -> Float64
+ 
+Left-invariant inner product on the Lie algebra `se(3)` weighted by the inertia
+matrix `J`:
+    ⟨Xe, Ye⟩ = Ω₁ᵀ J Ω₂ + v₁ᵀ v₂
+ 
+# Arguments
+- `se3`: `LieAlgebra` of `SE3`.
+- `Xe, Ye`: Tangent vectors at the identity.
+- `J::SMatrix{3,3}`: Inertia matrix. Defaults to the global `𝕁`.
+ 
+# Returns
+`Float64`.
+"""
 function LieGroups.inner(se3::LieAlgebra{ℝ, <:LieGroups.SpecialEuclideanGroupOperation, <:SpecialEuclideanGroup}, Xe, Ye; J=𝕁)
   so3 = LieAlgebra(SpecialOrthogonalGroup(3))
   Ω1 = vee(so3, Xe[se3, :Rotation]) 
@@ -34,6 +62,22 @@ function LieGroups.inner(se3::LieAlgebra{ℝ, <:LieGroups.SpecialEuclideanGroupO
   v2 = Ye[se3, :Translation]
   return Ω1' * J * Ω2 + v1' * v2
 end
+
+"""
+    inner(SE3, g, Xg, Yg; J=𝕁) -> Float64
+ 
+Left-invariant Riemannian inner product on SE(3) at point `g`, obtained by
+left-translating `Xg, Yg` back to the identity and applying `inner` on `se(3)`.
+ 
+# Arguments
+- `SE3`: `SpecialEuclideanGroup(3)`.
+- `g`: SE(3) element.
+- `Xg, Yg`: Tangent vectors at `g`.
+- `J`: Inertia matrix.
+ 
+# Returns
+`Float64`.
+"""
 function Manifolds.inner(SE3::SpecialEuclideanGroup, g, Xg, Yg; J=𝕁)
   # Pull back the vectors to the identity_element
   Xe = diff_left_compose(SE3, g, inv(SE3, g), Xg)
@@ -48,6 +92,23 @@ function Manifolds.inner(SE3::SpecialEuclideanGroup, A::AbstractAtlas, chart_ind
   return Manifolds.inner(SE3, g, Xg, Yg; J=J)
 end
 #
+"""
+    levi_civita_connection_analytical(SE3, g, X, Y; J=𝕁) -> tangent vector
+ 
+Compute the Levi-Civita connection ∇_X Y at `g` analytically using the
+left-trivialized formula:
+    ∇_X Y|_e = ½[X,Y] + ½(ad_X^† Y + ad_Y^† X)
+then left-translate the result back to `g`.
+ 
+# Arguments
+- `SE3`: `SpecialEuclideanGroup(3)`.
+- `g`: SE(3) evaluation point.
+- `X, Y`: Tangent vectors at `g`.
+- `J`: Inertia matrix.
+ 
+# Returns
+Tangent vector at `g` (same representation as `X`, `Y`).
+"""
 function levi_civita_connection_analytical(SE3, g, X, Y; J=𝕁)
   # Step 1: Left-translate g, X, Y to the identity
   g_inv = inv(SE3, g)
@@ -113,6 +174,21 @@ end
 #
 #     (i_X dμ)^♯ = (0, λ (B-B') v_X).
 
+"""
+    se3_body_twist(G, g, Xg) -> (Ω, v)
+ 
+Extract the body-frame angular velocity `Ω` and linear velocity `v` from a
+tangent vector `Xg` at `g` by left-translating to the identity.
+ 
+# Arguments
+- `G::SpecialEuclideanGroup{3}`: The Lie group.
+- `g`: SE(3) element.
+- `Xg`: Tangent vector at `g`.
+ 
+# Returns
+- `Ω::SVector{3}`: Angular velocity in body frame.
+- `v::SVector{3}`: Linear velocity in body frame.
+"""
 function se3_body_twist(G::SpecialEuclideanGroup, g, Xg)
   Xe = diff_left_compose(G, g, inv(G, g), Xg)
   Ω = vee(so3, Xe[se3, :Rotation])
@@ -120,6 +196,20 @@ function se3_body_twist(G::SpecialEuclideanGroup, g, Xg)
   return SVector{3,Float64}(Ω[1], Ω[2], Ω[3]), SVector{3,Float64}(v[1], v[2], v[3])
 end
 
+"""
+    se3_tangent_from_body_twist(G, g, Ω, v) -> Matrix{Float64}
+ 
+Reconstruct a tangent vector at `g` from body-frame angular and linear
+velocities by left-translating from the identity.
+ 
+# Arguments
+- `G::SpecialEuclideanGroup{3}`.
+- `g`: SE(3) element (rotation `R` is extracted).
+- `Ω, v::SVector{3}`: Body-frame twist components.
+ 
+# Returns
+4×4 `Matrix{Float64}` tangent vector at `g`.
+"""
 function se3_tangent_from_body_twist(G::SpecialEuclideanGroup, g, Ω, v)
   R = g[G, :Rotation]
   Ωs = SVector{3,Float64}(Ω[1], Ω[2], Ω[3])
@@ -127,11 +217,36 @@ function se3_tangent_from_body_twist(G::SpecialEuclideanGroup, g, Ω, v)
   return vcat(hcat(R * hat(so3, Ωs), R * vs), zeros(1, 4))
 end
 
+"""
+    corridor_vec3(q) -> SVector{3, Float64}
+ 
+Convenience wrapper: evaluate `corridor_flow_direction_3d(q...)` from `vector_field.jl`
+and return as an `SVector{3}`.
+ 
+# Arguments
+- `q`: Position in ℝ³.
+ 
+# Returns
+`SVector{3, Float64}`.
+"""
 function corridor_vec3(q)
   V = corridor_flow_direction_3d(q[1], q[2], q[3])
   return SVector{3,Float64}(V[1], V[2], V[3])
 end
 
+"""
+    corridor_jacobian_fd(q; h=1e-5) -> SMatrix{3,3, Float64}
+ 
+Approximate the Jacobian ∂V/∂q of the corridor vector field by central finite
+differences with step size `h`.
+ 
+# Arguments
+- `q`: Position in ℝ³.
+- `h::Float64`: Finite-difference step.
+ 
+# Returns
+`SMatrix{3,3, Float64}`.
+"""
 function corridor_jacobian_fd(q; h=1e-5)
   qs = SVector{3,Float64}(q[1], q[2], q[3])
   J = zeros(3, 3)
@@ -150,6 +265,22 @@ function corridor_jacobian_fd(q; h=1e-5)
   return SMatrix{3,3,Float64}(J)
 end
 
+"""
+    infer_translational_λ(G, g, μ; fallback=nothing) -> Float64
+ 
+Infer the effective λ parameter of the 1-form `μ = λ V(q)♭` by projecting
+the sharp of `μ(g)` onto the body-frame corridor direction and dividing.
+ 
+# Arguments
+- `G::SpecialEuclideanGroup{3}`.
+- `g`: SE(3) element.
+- `μ`: Callable `(G, g) -> CotangentVector` representing the 1-form.
+- `fallback`: Value to return if the denominator is degenerate. Falls back to
+  global `λ` or `1.0`.
+ 
+# Returns
+`Float64`: inferred λ value.
+"""
 function infer_translational_λ(G::SpecialEuclideanGroup, g, μ; fallback=nothing)
   R = g[G, :Rotation]
   q = g[G, :Translation]
@@ -176,6 +307,24 @@ function infer_translational_λ(G::SpecialEuclideanGroup, g, μ; fallback=nothin
   end
 end
 
+"""
+    dμ_translational_SE3(G, g, Xg, Yg; λ_metric, jacobian_h=1e-5) -> Float64
+ 
+Evaluate the exterior derivative `dμ(Xg, Yg)` for the translational 1-form
+`μ = λ V(q)♭` using the formula
+    dμ(X,Y) = λ [(B vₓ)·vᵧ - (B vᵧ)·vₓ],  B = Rᵀ DV(q) R
+directly in body coordinates, without chart-based differentiation.
+ 
+# Arguments
+- `G::SpecialEuclideanGroup{3}`.
+- `g`: SE(3) element.
+- `Xg, Yg`: Tangent vectors at `g`.
+- `λ_metric::Float64`: Metric parameter.
+- `jacobian_h`: FD step for `corridor_jacobian_fd`.
+ 
+# Returns
+`Float64`. Returns `0.0` on non-finite inputs.
+"""
 function dμ_translational_SE3(
   G::SpecialEuclideanGroup,
   g,
@@ -197,6 +346,22 @@ function dμ_translational_SE3(
   return isfinite(val) ? val : 0.0
 end
 
+"""
+    sharp_i_dμ_translational_SE3(G, g, Xg; λ_metric, jacobian_h=1e-5) -> tangent vector
+ 
+Compute the sharp of the interior product `ι_{Xg} dμ` for the translational
+1-form `μ = λ V(q)♭`. The result lives in the translational part of `se(3)`:
+    (ι_{Xg} dμ)^♯ = (0, λ (B - Bᵀ) vₓ).
+ 
+# Arguments
+- `G::SpecialEuclideanGroup{3}`.
+- `g`: SE(3) element.
+- `Xg`: Tangent vector at `g`.
+- `λ_metric, jacobian_h`: As in `dμ_translational_SE3`.
+ 
+# Returns
+Tangent vector at `g` (4×4 matrix). Returns `zero(Xg)` on failure.
+"""
 function sharp_i_dμ_translational_SE3(
   G::SpecialEuclideanGroup,
   g,
@@ -226,6 +391,29 @@ function sharp_i_dμ_translational_SE3(
   )
 end
 
+"""
+    difference_tensor(G::SpecialEuclideanGroup, A, chart_index, g, μ, Xg, Yg;
+                      backend=AutoForwardDiff(), atol=1e-9, jacobian_h=1e-5)
+    -> tangent vector
+ 
+Compute the difference tensor
+    T(X, Y) = ∇̃_X Y - ∇_X Y
+between the Levi-Civita connections of the deformed metric `g_μ = g + μ⊗μ` and
+the base metric, evaluated at `g`. Uses the analytical Levi-Civita formula and
+the direct `dμ` computation.
+ 
+# Arguments
+- `G`: `SpecialEuclideanGroup(3)`.
+- `A`, `chart_index`: Atlas and chart (unused in the current direct path, but
+  retained for API compatibility).
+- `g`: SE(3) evaluation point.
+- `μ`: 1-form callable.
+- `Xg, Yg`: Tangent vectors at `g`.
+- `backend`, `atol`, `jacobian_h`: Differentiation backend and tolerances.
+ 
+# Returns
+Tangent vector at `g` representing T(X,Y). Returns `zero(Xg)` on numerical failure.
+"""
 function difference_tensor(
   G::SpecialEuclideanGroup, A::AbstractAtlas, chart_index, g, μ, Xg, Yg; 
   backend=AutoForwardDiff(),
@@ -304,6 +492,22 @@ function difference_tensor(
   return T
 end
 
+"""
+    print_difference_tensor_term_breakdown(G, A, chart_index, g, μ, Xg, Yg;
+                                backend=AutoForwardDiff(), jacobian_h=1e-5)
+    -> NamedTuple or nothing
+ 
+Compute and print the individual terms (term1, term2a–c, term3, term4a–b) of
+the difference tensor formula together with their rotational and translational
+norms. Useful for debugging which term dominates or diverges.
+ 
+# Arguments
+Same as `difference_tensor`.
+ 
+# Returns
+`NamedTuple` with fields `term1, term2a, term2b, term2c, term3, term4a, term4b, total`
+(each a tangent vector), or `nothing` if `nμ` is degenerate.
+"""
 function print_difference_tensor_term_breakdown(
   G::SpecialEuclideanGroup,
   A::AbstractAtlas,
@@ -415,6 +619,29 @@ end
 # ------------------------------------------------------------------------------------------
 # Compute the Levi-Civita connection (in coordinates)
 # Assume Y(M, p) is a function that returns the coordinates of Y in chart_index at any point near p
+"""
+    partial_derivatives_vector_field(M::AbstractManifold, A, chart_index, p, Y, k;
+                                      backend=AutoForwardDiff())
+    -> Vector{Float64}
+ 
+Compute the gradient of the `k`-th coordinate of the vector field `Y` with
+respect to chart coordinates at `p`, using the specified AD backend.
+ 
+# Arguments
+- `M`: Manifold.
+- `A, chart_index`: Atlas and chart.
+- `p`: Evaluation point (intrinsic).
+- `Y`: Vector field callable `(M, p) -> tangent vector`.
+- `k::Int`: Component index.
+- `backend`: Differentiation backend.
+ 
+# Returns
+`Vector{Float64}` of length `dim(M)`: partial derivatives ∂_i Y^k.
+ 
+!!! note
+    This is the legacy chart-based implementation. See `levi_civita_connection_analytical`
+    for the stable analytical alternative.
+"""
 function partial_derivatives_vector_field(
   M::AbstractManifold, A, chart_index, p, Y, k; 
   backend=AutoForwardDiff()
@@ -429,6 +656,19 @@ function partial_derivatives_vector_field(
   return DifferentiationInterface.gradient(Yk_coord, backend, get_parameters(M, A, chart_index, p))
 end
 #
+"""
+    levi_civita_connection(M::AbstractManifold, A, chart_index, p, X, Y;
+                            backend=AutoForwardDiff())
+    -> tangent vector
+ 
+Compute ∇_X Y at `p` via Christoffel symbols in the given chart (legacy,
+chart-based path). Uses `partial_derivatives_vector_field` and
+`christoffel_symbols_second`.
+ 
+!!! warning
+    Numerically unstable for the SE(3) dynamics in this codebase. Prefer
+    `levi_civita_connection_analytical`.
+"""
 function levi_civita_connection(
   M::AbstractManifold, A::AbstractAtlas, chart_index, p, X, Y; 
   backend=AutoForwardDiff()
@@ -459,6 +699,23 @@ end
 #
 # For abstract Lie groups
 # Y is a vector field, i.e. a function Y(G, g) that returns a vector tangent to G at g
+"""
+    partial_derivatives_one_form(G::AbstractLieGroup, A, chart_index, g, μ, k;
+                                  backend=AutoForwardDiff())
+    -> Vector{Float64}
+ 
+Compute ∂_i μ_k at `g` for the 1-form `μ` in the given chart.
+ 
+# Arguments
+- `G`: Lie group.
+- `A, chart_index, g`: Atlas, chart, evaluation point.
+- `μ`: 1-form callable.
+- `k::Int`: Component index.
+- `backend`: AD backend.
+ 
+# Returns
+`Vector{Float64}`: partial derivatives.
+"""
 function partial_derivatives_vector_field(
   G::AbstractLieGroup, A, chart_index, g, Y, k; 
   backend=AutoForwardDiff()
@@ -471,6 +728,7 @@ function partial_derivatives_vector_field(
   )[k]  
   return DifferentiationInterface.gradient(Yk_coord, backend, get_parameters(G, A, chart_index, g))
 end
+
 function levi_civita_connection(
   G::AbstractLieGroup, A::AbstractAtlas, chart_index, g, X, Y; 
   backend=AutoForwardDiff()
@@ -515,6 +773,17 @@ function partial_derivatives_one_form(
   return DifferentiationInterface.gradient(μk_coord, backend, get_parameters(G, A, chart_index, g))
 end
 #
+"""
+    differential_one_form(G::AbstractLieGroup, A, chart_index, g, μ;
+                           backend=AutoForwardDiff())
+    -> Matrix{Float64}
+ 
+Compute the coordinate matrix of `dμ` at `g` using the formula
+    (dμ)_{ij} = ∂_i μ_j - ∂_j μ_i.
+ 
+# Returns
+`Matrix{Float64}` of size `(n, n)` where `n = dim(G)`.
+"""
 function differential_one_form(
   G::AbstractLieGroup, A, chart_index, g, μ; 
   backend=AutoForwardDiff()
@@ -537,6 +806,17 @@ function differential_one_form(
 end
 #
 # To evaluate the 1-form μ, Xg and Yg are assumed to be tangent vectors at g
+"""
+    evaluate_differential_one_form(G, A, chart_index, g, μ, Xg, Yg;
+                                    backend=AutoForwardDiff())
+    -> Float64
+ 
+Evaluate `dμ(Xg, Yg)` using coordinate representations of `Xg`, `Yg` and the
+matrix from `differential_one_form`.
+ 
+# Returns
+`Float64`.
+"""
 function evaluate_differential_one_form(
   G::AbstractLieGroup, A, chart_index, g, μ, Xg, Yg; 
   backend=AutoForwardDiff()
@@ -548,6 +828,22 @@ function evaluate_differential_one_form(
   return Xg_coords' * dμ * Yg_coords
 end
 #
+"""
+    sharp_differential_one_form(G, A, chart_index, g, μ, Xg;
+                                 backend=AutoForwardDiff(),
+                                 cond_max=1e8, sharp_max=1e3)
+    -> tangent vector
+ 
+Compute `(ι_{Xg} dμ)^♯` via the chart-based local metric. Falls back to zero
+with a warning when the local metric is ill-conditioned or the result is
+excessively large.
+ 
+# Returns
+Tangent vector at `g`, or `zero(Xg)` on failure.
+ 
+!!! warning
+    Numerically unstable for this codebase. Prefer `sharp_i_dμ_translational_SE3`.
+"""
 function sharp_differential_one_form(
   G::AbstractLieGroup,
   A,
@@ -658,6 +954,15 @@ cond = %.6e
   return get_vector(G, g, sharp_coords, ib.A.basis)
 end
 
+"""
+    safe_dμ(M, p, Xp, Yp) -> Float64
+ 
+Wrapper around `evaluate_differential_one_form` that catches exceptions and
+returns `0.0` on any failure.
+ 
+# Returns
+`Float64`.
+"""
 function safe_dμ(M, p, Xp, Yp)
   try
     val = evaluate_differential_one_form(
