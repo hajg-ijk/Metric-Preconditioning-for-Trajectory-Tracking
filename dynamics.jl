@@ -733,16 +733,16 @@ function physical_control(
 
     nu_preconditioning_world = γ_pre * (Tqd_clamped - Tq_clamped)
 
-    _maybe_print_translational_preconditioner_debug(
-        t,
-        q,
-        qd(t),
-        q̇_world,
-        Tq,
-        Tq_clamped,
-        γ_pre,
-        λ_metric,
-    )
+    # _maybe_print_translational_preconditioner_debug(
+    #     t,
+    #     q,
+    #     qd(t),
+    #     q̇_world,
+    #     Tq,
+    #     Tq_clamped,
+    #     γ_pre,
+    #     λ_metric,
+    # )
 
     f_phys, u_phys, Rd, intermediates = controls_and_desired_rotation(
       t,

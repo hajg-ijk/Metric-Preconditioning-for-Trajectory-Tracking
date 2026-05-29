@@ -70,16 +70,6 @@ shared_kwargs = (
     write=true,
 )
 
-# cases_old = [
-#     # (npz file,            q0 perturbation,       f_max,   u_max,   trajectory label)
-#     ("maze_reference.npz",    [0.25, -0.05, 0.0],  5.0,     25.0,    "exact_f5_u25"),
-#     ("maze_reference.npz",    [0.25, -0.05, 0.0],  50.0,    250.0,   "exact_f50_u250"),
-#     ("maze_reference.npz",    [0.25, -0.05, 0.0],  nothing, nothing, "exact_nolim"),
-#     ("inexact_reference.npz", [0.25, -0.05, 0.0],  5.0,     25.0,    "inexact_f5_u25"),
-#     ("inexact_reference.npz", [0.25, -0.05, 0.0],  50.0,    250.0,   "inexact_f50_u250"),
-#     ("inexact_reference.npz", [0.25, -0.05, 0.0],  nothing, nothing, "inexact_nolim"),
-# ]
-
 cases = [
     # (npz file,            q0 perturbation,       f_max,   u_max,   trajectory label)
     ("maze_reference.npz",    [0.25, -0.05, 0.0],  10.0,    100.0,   "exact_f10_u100"),
