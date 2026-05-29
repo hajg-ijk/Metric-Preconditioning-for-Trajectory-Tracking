@@ -47,7 +47,7 @@ function main()
         label="Conditioned reference trajectory",
     )
 
-    scatter!(
+    GLMakie.scatter!(
         ax,
         [q_start[1]], [q_start[2]], [q_start[3]],
         color=:green,
@@ -55,7 +55,7 @@ function main()
         label="Start",
     )
 
-    scatter!(
+    GLMakie.scatter!(
         ax,
         [q_goal[1]], [q_goal[2]], [q_goal[3]],
         color=:purple,
